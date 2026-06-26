@@ -242,11 +242,14 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 
 		fyne.DoAndWait(func() { downloadProgress.SetValue(0.95) })
 
-		// 清理旧文件，避免新旧 DLL 混搭导致 SxS 错误
-		cleanHeliumDir(parentPath)
+		// 检测实际安装目录（可能在 Application 子目录中）
+		extractDir := detectExtractDir(parentPath)
 
-		// 解压 ZIP 到安装目录
-		err = unzipAll(fileName, parentPath)
+		// 清理旧文件，避免新旧 DLL 混搭导致 SxS 错误（保留 User Data）
+		cleanHeliumDir(extractDir)
+
+		// 解压 ZIP 到检测到的目录
+		err = unzipAll(fileName, extractDir)
 		if err != nil {
 			logger.Errorf("解压失败: %v", err)
 			downloadErrorFlag.Store(true)
@@ -275,9 +278,23 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 	dl.Start()
 }
 
-// 清理 Helium 目录中的旧文件，防止新旧 DLL 版本冲突
+// 检测 chrome.exe 实际所在目录（可能在 Application 子目录中）
+func detectExtractDir(installPath string) string {
+	// 如果当前安装目录下 Application\chrome.exe 存在，说明是 NSIS 安装器结构
+	appDir := filepath.Join(installPath, "Application")
+	if _, err := os.Stat(filepath.Join(appDir, "chrome.exe")); err == nil {
+		logger.Debug("检测到 Application 子目录结构，解压到 Application 目录")
+		return appDir
+	}
+	// 否则直接解压到安装根目录
+	logger.Debug("检测到根目录结构，直接解压到安装目录")
+	return installPath
+}
+
+// 清理 Helium 目录中的旧程序文件，防止新旧 DLL 版本冲突
+// 注意：保留 User Data 等用户数据目录
 func cleanHeliumDir(targetDir string) {
-	// 删除已知的 Chromium/Helium 可执行文件和 DLL
+	// 只删除已知的程序文件，不删除任何目录（保护 User Data）
 	knownFiles := []string{
 		"chrome.exe",
 		"chrome.dll",
@@ -291,19 +308,28 @@ func cleanHeliumDir(targetDir string) {
 		"resources.pak",
 		"chrome_100_percent.pak",
 		"chrome_200_percent.pak",
+		"chrome_utils.dll",
+		"elevation_service.exe",
+		"notification_helper.exe",
+		"setup.exe",
+		"WidevineCdm",
 	}
 	for _, f := range knownFiles {
 		p := filepath.Join(targetDir, f)
-		if fileExist(p) {
-			os.Remove(p)
+		if fi, err := os.Stat(p); err == nil {
+			if !fi.IsDir() {
+				os.Remove(p)
+			} else {
+				os.RemoveAll(p)
+			}
 		}
 	}
-	// 删除已知子目录
+	// 清理已知的程序子目录（不含用户数据）
 	knownDirs := []string{
 		"locales",
 		"resources",
 		"swiftshader",
-		"Application",
+		"MEIPreload",
 	}
 	for _, d := range knownDirs {
 		p := filepath.Join(targetDir, d)
@@ -311,7 +337,7 @@ func cleanHeliumDir(targetDir string) {
 			os.RemoveAll(p)
 		}
 	}
-	logger.Debug("清理旧 Helium 文件完成")
+	logger.Debug("清理旧程序文件完成，保留 User Data")
 }
 
 func createDeskLnk(data *SettingsData) error {

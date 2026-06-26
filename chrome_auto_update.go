@@ -107,9 +107,11 @@ func autoInstall(data *SettingsData, info HeliumInfo) {
 	if info.Sha256 == "" || sha256 == info.Sha256 {
 		chromeInUse := isProcessExist(filepath.Join(parentPath, "chrome.exe"))
 		if !chromeInUse {
+			// 检测实际安装目录（可能在 Application 子目录中）
+			extractDir := detectExtractDir(parentPath)
 			// 清理旧文件，避免新旧 DLL 混搭导致 SxS 错误
-			cleanHeliumDir(parentPath)
-			err := unzipAll(fileName, parentPath)
+			cleanHeliumDir(extractDir)
+			err := unzipAll(fileName, extractDir)
 			if err != nil {
 				logger.Errorf("自动更新解压失败: %v", err)
 				return
