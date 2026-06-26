@@ -242,6 +242,9 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 
 		fyne.DoAndWait(func() { downloadProgress.SetValue(0.95) })
 
+		// 清理旧文件，避免新旧 DLL 混搭导致 SxS 错误
+		cleanHeliumDir(parentPath)
+
 		// 解压 ZIP 到安装目录
 		err = unzipAll(fileName, parentPath)
 		if err != nil {
@@ -270,6 +273,45 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 	}()
 
 	dl.Start()
+}
+
+// 清理 Helium 目录中的旧文件，防止新旧 DLL 版本冲突
+func cleanHeliumDir(targetDir string) {
+	// 删除已知的 Chromium/Helium 可执行文件和 DLL
+	knownFiles := []string{
+		"chrome.exe",
+		"chrome.dll",
+		"chrome_child.dll",
+		"chrome_elf.dll",
+		"libegl.dll",
+		"libglesv2.dll",
+		"libvk_swiftshader.dll",
+		"v8_context_snapshot.bin",
+		"icudtl.dat",
+		"resources.pak",
+		"chrome_100_percent.pak",
+		"chrome_200_percent.pak",
+	}
+	for _, f := range knownFiles {
+		p := filepath.Join(targetDir, f)
+		if fileExist(p) {
+			os.Remove(p)
+		}
+	}
+	// 删除已知子目录
+	knownDirs := []string{
+		"locales",
+		"resources",
+		"swiftshader",
+		"Application",
+	}
+	for _, d := range knownDirs {
+		p := filepath.Join(targetDir, d)
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			os.RemoveAll(p)
+		}
+	}
+	logger.Debug("清理旧 Helium 文件完成")
 }
 
 func createDeskLnk(data *SettingsData) error {
