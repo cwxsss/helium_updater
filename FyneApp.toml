@@ -1,0 +1,8 @@
+Website = "https://github.com/imputnet/helium-windows"
+
+[Details]
+  Icon = "assets/img/chrome.png"
+  Name = "helium_updater"
+  ID = "com.github.libs.helium"
+  Version = "1.0"
+  Build = 0

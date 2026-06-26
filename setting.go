@@ -1,0 +1,177 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"syscall"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/data/binding"
+	"fyne.io/fyne/v2/widget"
+	jsoniter "github.com/json-iterator/go"
+)
+
+func settingsScreen(a fyne.App, win fyne.Window, data *SettingsData) fyne.CanvasObject {
+	installFileConfig := widget.NewCheckWithData(LoadString("BaseRemainInstallFiles"), data.remainInstallFileSettings)
+	historyVersionConfig := widget.NewCheckWithData(LoadString("BaseRemainHistoryFiles"), data.remainHistoryFileSettings)
+	downloadChromeViaProxy := widget.NewCheckWithData(LoadString("BaseDownloadChromeViaProxy"), data.downloadChromeViaProxy)
+	proxyType := widget.NewSelect([]string{"GH-PROXY", "HTTP(S)", "SOCKS5"}, func(value string) {
+		_ = data.proxyType.Set(value)
+	})
+	proxyTypeVal := getString(data.proxyType)
+	if proxyTypeVal == "" {
+		proxyType.Selected = "GH-PROXY"
+		_ = data.proxyType.Set("GH-PROXY")
+	} else {
+		proxyType.Selected = getString(data.proxyType)
+	}
+	ghProxyEntry := widget.NewEntryWithData(data.ghProxy)
+	ghProxyEntry.PlaceHolder = LoadString("BaseGhProxy")
+	themeRadio := widget.NewRadioGroup([]string{"System", "Light", "Dark"}, func(value string) {
+		_ = data.themeSettings.Set(value)
+		fyne.CurrentApp().Settings().SetTheme(&MyTheme{data.themeSettings, data.langSettings})
+	})
+	langRadio := widget.NewRadioGroup([]string{
+		"System",
+		"en-US",
+		"zh-CN"}, func(value string) {
+		if value != "" {
+			_ = data.langSettings.Set(value)
+			restartApp(a)
+		}
+	})
+	if getString(data.langSettings) == "" {
+		_ = data.langSettings.Set(LoadString("SystemOption"))
+	}
+	langRadio.Selected = getString(data.langSettings)
+	langRadio.Horizontal = true
+	if getString(data.themeSettings) == "" {
+		_ = data.themeSettings.Set(LoadString("SystemOption"))
+	}
+	themeRadio.Selected = getString(data.themeSettings)
+	themeRadio.Horizontal = true
+	updateUrl := binding.NewString()
+	updateBtnText := binding.NewString()
+	updateBtnText.Set(LoadString("UpdaterCheckBtnLabel"))
+	newBtn := widget.NewButton(getString(updateBtnText), func() {
+		//_ = a.OpenURL(parseURL(url))
+		UpdateSelf(a, data, getString(updateUrl), updateBtnText)
+	})
+	newBtn.Hide()
+	go chromeUpdaterNew(data, updateUrl, newBtn)
+	updateBtnText.AddListener(binding.NewDataListener(func() {
+		newBtn.SetText(getString(updateBtnText))
+	}))
+	logger.Debug("Setting tab load success.")
+	return container.NewCenter(container.NewVBox(
+		widget.NewLabelWithStyle(LoadString("BaseSettingLabel"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewGridWithColumns(3, installFileConfig, historyVersionConfig, downloadChromeViaProxy),
+		container.NewBorder(nil, nil, proxyType, nil, ghProxyEntry),
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle(LoadString("ThemeLabel"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewHBox(themeRadio),
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle(LoadString("LangLabel"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewHBox(langRadio),
+		widget.NewSeparator(),
+		widget.NewLabelWithStyle(LoadString("AboutLabel"), fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewHBox(
+			widget.NewLabel(LoadString("VersionLabel")+": v"+fyne.CurrentApp().Metadata().Version),
+			newBtn,
+			widget.NewButton(LoadString("IssuesLabel"), func() {
+				_ = a.OpenURL(parseURL("https://github.com/imputnet/helium-windows/issues"))
+			}),
+		),
+		container.NewHBox(
+			widget.NewHyperlink("Helium GitHub", parseURL("https://github.com/imputnet/helium-windows")),
+			widget.NewLabel("-"),
+			widget.NewHyperlink("LICENSE", parseURL("https://github.com/imputnet/helium-windows/blob/main/LICENSE")),
+		),
+	))
+}
+
+func UpdateSelf(a fyne.App, sd *SettingsData, url string, btnText binding.String) {
+	_ = btnText.Set("0.0%")
+	ex, err := os.Executable()
+	if err != nil {
+		logger.Panic(err)
+	}
+	exeName := filepath.Base(ex)
+	parentPath := filepath.Dir(ex)
+	fileName := getFileName(url)
+	fileName = filepath.Join(parentPath, fileName)
+	updaterDownloadProgress := widget.NewProgressBar()
+	updaterDownloadProgress.TextFormatter = func() string {
+		percentageStr := fmt.Sprintf("%.1f%%", updaterDownloadProgress.Value*100.0/0.9)
+		_ = btnText.Set(percentageStr)
+		return ""
+	}
+
+	dl := NewDownloader(sd, url, fileName, 16, updaterDownloadProgress)
+
+	go func() {
+		err := <-dl.Done
+		if err != nil {
+			logger.Errorf("自身更新下载失败: %v", err)
+			_ = btnText.Set(LoadString("UpdaterCheckBtnLabel"))
+			return
+		}
+
+		if fileExist(fileName) {
+			updaterPath := filepath.Join(parentPath, exeName)
+			if fileExist(updaterPath) {
+				os.Rename(updaterPath, filepath.Join(parentPath, exeName+"_old"))
+			}
+			err = unzip(fileName, exeName)
+			if err == nil {
+				_ = os.Remove(fileName)
+				cmd := exec.Command("cmd.exe", "/C", updaterPath)
+				cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+				fyne.DoAndWait(a.Quit)
+				_ = cmd.Start()
+			}
+		}
+	}()
+
+	dl.Start()
+}
+func chromeUpdaterNew(sd *SettingsData, updateUrl binding.String, newBtn *widget.Button) error {
+	// 自更新检查 - 从 GitHub API 获取最新版本
+	apiUrl := "https://api.github.com/repos/libsgh/chrome_updater/releases?per_page=5"
+	client, reqUrl := setProxy(sd, apiUrl)
+	response, err := client.Get(reqUrl)
+	if err != nil {
+		logger.Errorln(err)
+		return err
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(response.Body)
+	var githubReleases []GithubRelease
+	if err := jsoniter.Unmarshal(data, &githubReleases); err != nil {
+		logger.Errorln(err)
+		return err
+	}
+	if len(githubReleases) != 0 {
+		ver := "v" + fyne.CurrentApp().Metadata().Version
+		lastedVer := githubReleases[0].TagName
+		for _, asset := range githubReleases[0].Assets {
+			if strings.Contains(asset.BrowserDownloadURL, fmt.Sprintf("chrome_updater-windows-%s.zip", runtime.GOARCH)) {
+				logger.Debugf("Updater url:%s", asset.BrowserDownloadURL)
+				updateUrl.Set(asset.BrowserDownloadURL)
+			}
+		}
+		hasNew := ver != lastedVer
+		if hasNew {
+			newBtn.Show()
+		} else {
+			newBtn.Hide()
+		}
+	}
+	return nil
+}
