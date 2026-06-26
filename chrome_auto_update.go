@@ -116,7 +116,6 @@ func autoInstall(data *SettingsData, info HeliumInfo) {
 	chromeInUse := isProcessExist(filepath.Join(parentPath, "chrome.exe"))
 	if !chromeInUse {
 		extractDir := detectExtractDir(parentPath)
-		isChromePlus := fileExist(filepath.Join(extractDir, "version.dll"))
 
 		// 安全解压到临时目录
 		tmpDir := filepath.Join(parentPath, "helium_update_tmp")
@@ -144,19 +143,9 @@ func autoInstall(data *SettingsData, info HeliumInfo) {
 			return
 		}
 
-		// 从 chrome.dll 读取版本号作为目录名
-		chromeVer := GetVersionFromPath(filepath.Join(tmpDir, "chrome.dll"))
-
-		if isChromePlus {
-			// Chrome++ 模式：直接解压到 Application 目录
-			cleanHeliumDir(extractDir)
-			moveFilesExclude(tmpDir, extractDir, []string{"chrome.exe"})
-		} else {
-			// 普通模式：解压到版本子目录
-			verExtractDir := getVersionExtractDir(extractDir, chromeVer)
-			cleanHeliumDir(verExtractDir)
-			moveFiles(tmpDir, verExtractDir)
-		}
+		// 清理旧文件并移动新文件
+		cleanHeliumDir(extractDir)
+		moveFiles(tmpDir, extractDir)
 		_ = os.RemoveAll(filepath.Join(parentPath, "helium_update_tmp"))
 
 		//清理

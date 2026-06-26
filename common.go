@@ -274,30 +274,6 @@ func moveFiles(srcDir, dstDir string) error {
 	return nil
 }
 
-// 移动文件到目标目录，跳过 excludes 列表中的文件名
-func moveFilesExclude(srcDir, dstDir string, excludes []string) error {
-	_ = os.MkdirAll(dstDir, os.ModePerm)
-	entries, err := os.ReadDir(srcDir)
-	if err != nil {
-		return err
-	}
-skipLoop:
-	for _, entry := range entries {
-		for _, ex := range excludes {
-			if strings.EqualFold(entry.Name(), ex) {
-				continue skipLoop
-			}
-		}
-		srcPath := filepath.Join(srcDir, entry.Name())
-		dstPath := filepath.Join(dstDir, entry.Name())
-		_ = os.RemoveAll(dstPath)
-		if err := os.Rename(srcPath, dstPath); err != nil {
-			return fmt.Errorf("move %s failed: %w", entry.Name(), err)
-		}
-	}
-	return nil
-}
-
 // 7z解压缩
 func UnCompress7z(filePath, targetDir string) {
 	r, err := sevenzip.OpenReader(filePath)
@@ -631,19 +607,19 @@ func GetFileVersion(path string) (string, error) {
 	return version, nil
 }
 func GetVersion(sd *SettingsData, fileName string) string {
-	installPath := getString(sd.installPath)
 	// 先尝试根目录
-	exePath := filepath.Join(installPath, fileName)
+	basePath := getString(sd.installPath)
+	exePath := filepath.Join(basePath, fileName)
 	if fileExist(exePath) {
 		ver, err := GetFileVersion(exePath)
 		if err == nil {
 			return ver
 		}
 	}
-	// 如果是 Chrome++ 结构，尝试 Application 子目录
-	appPath := filepath.Join(installPath, "Application", fileName)
-	if fileExist(appPath) {
-		ver, err := GetFileVersion(appPath)
+	// 再尝试 Application 子目录
+	exePath = filepath.Join(basePath, "Application", fileName)
+	if fileExist(exePath) {
+		ver, err := GetFileVersion(exePath)
 		if err == nil {
 			return ver
 		}
