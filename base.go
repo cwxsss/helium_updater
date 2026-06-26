@@ -49,10 +49,16 @@ func baseScreen(win fyne.Window, data *SettingsData) fyne.CanvasObject {
 		}
 	}))
 	checkBtn := widget.NewButtonWithIcon(LoadString("CheckBtnLabel"), theme.SearchIcon(), func() {
-		err := syncHeliumInfo(data)
-		if err != nil {
-			alertInfo(LoadString("UpdateCheckErrorMsg"), win)
-		}
+		data.checkBtnStatus.Set(true)
+		go func() {
+			err := syncHeliumInfo(data)
+			fyne.DoAndWait(func() {
+				data.checkBtnStatus.Set(false)
+				if err != nil {
+					alertInfo(LoadString("UpdateCheckErrorMsg"), win)
+				}
+			})
+		}()
 	})
 	createLnkBtn := widget.NewButtonWithIcon(LoadString("CreateLnkBtnLabel"), theme.ContentAddIcon(), func() {
 		err := createDeskLnk(data)
@@ -295,9 +301,10 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 		return
 	}
 
-	// 清理旧文件，把新文件移过去
-	cleanHeliumDir(extractDir)
-	if err := moveFiles(tmpDir, extractDir); err != nil {
+	// 清理旧文件，把新文件移到版本子目录（Chrome++ 模式）
+	verExtractDir := getVersionExtractDir(extractDir, info.Version)
+	cleanHeliumDir(verExtractDir)
+	if err := moveFiles(tmpDir, verExtractDir); err != nil {
 		logger.Errorf("移动文件失败: %v", err)
 		downloadErrorFlag.Store(true)
 		fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
@@ -322,25 +329,33 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 	runFlag = 0
 }
 
-// 检测 chrome.exe 实际所在目录（可能在 Application 子目录中）
+// 检测实际解压目录（针对 Chrome++ 结构：Application/chrome.exe 是启动器，
+// 实际浏览器文件在 Application/{版本号}/ 目录中）
 func detectExtractDir(installPath string) string {
-	// 如果当前安装目录下 Application\chrome.exe 存在，说明是 NSIS 安装器结构
 	appDir := filepath.Join(installPath, "Application")
-	if _, err := os.Stat(filepath.Join(appDir, "chrome.exe")); err == nil {
-		logger.Debug("检测到 Application 子目录结构，解压到 Application 目录")
+	if fileExist(filepath.Join(appDir, "chrome.exe")) {
+		logger.Debug("检测到 Chrome++ Application 目录结构")
 		return appDir
 	}
-	// 否则直接解压到安装根目录
 	logger.Debug("检测到根目录结构，直接解压到安装目录")
 	return installPath
 }
 
+// 获取新版本的解压目标目录（在 Application 下创建版本号目录）
+func getVersionExtractDir(extractDir, newVersion string) string {
+	if filepath.Base(extractDir) == "Application" {
+		verDir := filepath.Join(extractDir, newVersion)
+		logger.Infof("Chrome++ 模式：解压到版本目录 %s", verDir)
+		return verDir
+	}
+	return extractDir
+}
+
 // 清理 Helium 目录中的旧程序文件，防止新旧 DLL 版本冲突
-// 注意：保留 User Data 等用户数据目录
+// 注意：保留 User Data 等用户数据目录，不删除 chrome.exe（Chrome++ 启动器）
 func cleanHeliumDir(targetDir string) {
-	// 只删除已知的程序文件，不删除任何目录（保护 User Data）
+	// 只删除已知的程序文件，不删除 chrome.exe（Chrome++ 启动器）
 	knownFiles := []string{
-		"chrome.exe",
 		"chrome.dll",
 		"chrome_child.dll",
 		"chrome_elf.dll",

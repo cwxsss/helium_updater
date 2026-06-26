@@ -607,13 +607,21 @@ func GetFileVersion(path string) (string, error) {
 	return version, nil
 }
 func GetVersion(sd *SettingsData, fileName string) string {
-	exePath := filepath.Join(getString(sd.installPath), fileName)
+	installPath := getString(sd.installPath)
+	// 先尝试根目录
+	exePath := filepath.Join(installPath, fileName)
 	if fileExist(exePath) {
 		ver, err := GetFileVersion(exePath)
 		if err == nil {
 			return ver
-		} else {
-			logger.Errorln(ver)
+		}
+	}
+	// 如果是 Chrome++ 结构，尝试 Application 子目录
+	appPath := filepath.Join(installPath, "Application", fileName)
+	if fileExist(appPath) {
+		ver, err := GetFileVersion(appPath)
+		if err == nil {
+			return ver
 		}
 	}
 	return "-"
