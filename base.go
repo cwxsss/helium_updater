@@ -192,7 +192,6 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 	data.folderEntryStatus.Set(true)
 	data.processStatus.Set(true)
 
-	// 获取下载 URL
 	info, err := getHeliumInfo(data)
 	if err != nil {
 		logger.Errorf("获取下载信息失败: %v", err)
@@ -209,73 +208,118 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 	fileName := getHeliumDownloadFileName(info.DownloadUrl)
 	fileName = filepath.Join(parentPath, fileName)
 
-	dl := NewDownloader(data, info.DownloadUrl, fileName, 16, downloadProgress)
-	if fs, _ := data.fileSizeRaw.Get(); fs > 0 {
-		dl.FileSize = int64(fs)
-	}
-	dl.UseProxy = getBool(data.downloadChromeViaProxy)
+	// 检测实际解压目录（可能在 Application 子目录中）
+	extractDir := detectExtractDir(parentPath)
+	expectedSha256 := strings.TrimSpace(info.Sha256)
 
-	go func() {
-		err := <-dl.Done
+	// 先检查本地是否已有有效文件，跳过下载
+	needDownload := true
+	if fileExist(fileName) {
+		localSha256 := sumFileSHA256(fileName)
+		if expectedSha256 != "" && localSha256 == expectedSha256 {
+			logger.Info("本地已有有效安装包，跳过下载")
+			needDownload = false
+		} else {
+			logger.Infof("本地文件 SHA256 不匹配，重新下载 (本地=%s, 期望=%s)", localSha256, expectedSha256)
+			os.Remove(fileName)
+		}
+	}
+
+	if needDownload {
+		dl := NewDownloader(data, info.DownloadUrl, fileName, 16, downloadProgress)
+		if fs, _ := data.fileSizeRaw.Get(); fs > 0 {
+			dl.FileSize = int64(fs)
+		}
+		dl.UseProxy = getBool(data.downloadChromeViaProxy)
+		dl.Start()
+
+		err = <-dl.Done
 		if err != nil {
 			logger.Errorf("下载失败: %v", err)
 			downloadErrorFlag.Store(true)
 			fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
-			defer data.checkBtnStatus.Set(false)
-			defer data.folderEntryStatus.Set(false)
-			defer func() { runFlag = 0 }()
+			data.checkBtnStatus.Set(false)
+			data.folderEntryStatus.Set(false)
+			runFlag = 0
 			return
 		}
 
 		// SHA256 校验
 		sha256 := sumFileSHA256(fileName)
-		expectedSha256 := strings.TrimSpace(info.Sha256)
 		if expectedSha256 != "" && sha256 != expectedSha256 {
 			logger.Errorf("SHA256 校验失败: 期望=%s, 实际=%s", expectedSha256, sha256)
 			downloadErrorFlag.Store(true)
 			fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
-			defer data.checkBtnStatus.Set(false)
-			defer data.folderEntryStatus.Set(false)
-			defer func() { runFlag = 0 }()
+			data.checkBtnStatus.Set(false)
+			data.folderEntryStatus.Set(false)
+			runFlag = 0
 			return
 		}
+	}
 
-		fyne.DoAndWait(func() { downloadProgress.SetValue(0.95) })
+	// 安全解压：先解压到临时目录，验证后覆盖
+	fyne.DoAndWait(func() { downloadProgress.SetValue(0.95) })
 
-		// 检测实际安装目录（可能在 Application 子目录中）
-		extractDir := detectExtractDir(parentPath)
+	tmpDir := filepath.Join(parentPath, "helium_update_tmp")
+	_ = os.RemoveAll(tmpDir)
+	defer os.RemoveAll(tmpDir)
 
-		// 清理旧文件，避免新旧 DLL 混搭导致 SxS 错误（保留 User Data）
-		cleanHeliumDir(extractDir)
+	if err := unzipAll(fileName, tmpDir); err != nil {
+		logger.Errorf("解压到临时目录失败: %v", err)
+		downloadErrorFlag.Store(true)
+		fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
+		data.checkBtnStatus.Set(false)
+		data.folderEntryStatus.Set(false)
+		runFlag = 0
+		return
+	}
 
-		// 解压 ZIP 到检测到的目录
-		err = unzipAll(fileName, extractDir)
-		if err != nil {
-			logger.Errorf("解压失败: %v", err)
-			downloadErrorFlag.Store(true)
-			fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
-			defer data.checkBtnStatus.Set(false)
-			defer data.folderEntryStatus.Set(false)
-			defer func() { runFlag = 0 }()
-			return
+	// 验证临时目录中确实有 chrome.exe（可能在嵌套子目录）
+	if !fileExist(filepath.Join(tmpDir, "chrome.exe")) {
+		entries, _ := os.ReadDir(tmpDir)
+		for _, e := range entries {
+			if e.IsDir() && fileExist(filepath.Join(tmpDir, e.Name(), "chrome.exe")) {
+				tmpDir = filepath.Join(tmpDir, e.Name())
+				break
+			}
 		}
+	}
 
-		// 清理
-		if !getBool(data.remainInstallFileSettings) {
-			_ = os.Remove(fileName)
-		}
-		if !getBool(data.remainHistoryFileSettings) {
-			_ = os.RemoveAll(filepath.Join(parentPath, getString(data.oldVer)))
-		}
+	if !fileExist(filepath.Join(tmpDir, "chrome.exe")) {
+		logger.Error("解压后的文件中未找到 chrome.exe")
+		downloadErrorFlag.Store(true)
+		fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
+		data.checkBtnStatus.Set(false)
+		data.folderEntryStatus.Set(false)
+		runFlag = 0
+		return
+	}
 
-		fyne.DoAndWait(func() { downloadProgress.SetValue(1) })
-		data.oldVer.Set(getString(data.curVer))
-		defer data.checkBtnStatus.Set(false)
-		defer data.folderEntryStatus.Set(false)
-		defer func() { runFlag = 0 }()
-	}()
+	// 清理旧文件，把新文件移过去
+	cleanHeliumDir(extractDir)
+	if err := moveFiles(tmpDir, extractDir); err != nil {
+		logger.Errorf("移动文件失败: %v", err)
+		downloadErrorFlag.Store(true)
+		fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
+		data.checkBtnStatus.Set(false)
+		data.folderEntryStatus.Set(false)
+		runFlag = 0
+		return
+	}
 
-	dl.Start()
+	// 清理安装包
+	if !getBool(data.remainInstallFileSettings) {
+		_ = os.Remove(fileName)
+	}
+	if !getBool(data.remainHistoryFileSettings) {
+		_ = os.RemoveAll(filepath.Join(parentPath, getString(data.oldVer)))
+	}
+
+	fyne.DoAndWait(func() { downloadProgress.SetValue(1) })
+	data.oldVer.Set(info.Version)
+	data.checkBtnStatus.Set(false)
+	data.folderEntryStatus.Set(false)
+	runFlag = 0
 }
 
 // 检测 chrome.exe 实际所在目录（可能在 Application 子目录中）
@@ -368,7 +412,6 @@ var (
 
 // 处理Helium安装路径
 func installPathHandle(data *SettingsData) {
-	//读取当前程序所在目录
 	p, _ := data.installPath.Get()
 	dir, err := os.Getwd()
 	if isValidPath(p) {
@@ -379,34 +422,49 @@ func installPathHandle(data *SettingsData) {
 	if err != nil {
 		logger.Panic(err)
 	}
-	// 打开当前目录
-	dirHandle, err := os.Open(dir)
-	if err != nil {
-		logger.Panic(err)
-	}
-	defer dirHandle.Close()
-	fileInfos, err := dirHandle.Readdir(-1)
-	if err != nil {
-		logger.Panic(err)
-	}
-	result := false
-	v := ""
-	for _, fileInfo := range fileInfos {
-		name := fileInfo.Name()
-		if name == "chrome.exe" {
-			result = true
-		}
-		if fileInfo.IsDir() && isNumeric(strings.ReplaceAll(name, ".", "")) {
-			v = fileInfo.Name()
-		}
-	}
-	if result {
+
+	if findChromeExe(dir) {
 		data.installPath.Set(dir)
-		data.oldVer.Set(v)
+		oldVer := readHeliumVersion(dir)
+		data.oldVer.Set(oldVer)
+		logger.Info("helium version:", oldVer)
 	} else {
 		data.oldVer.Set("-")
+		logger.Info("未检测到已安装的 Helium")
 	}
 	if getBool(data.downBtnStatus) {
 		data.checkBtnStatus.Set(false)
 	}
+}
+
+// 在任何子目录中查找 chrome.exe
+func findChromeExe(dir string) bool {
+	if fileExist(filepath.Join(dir, "chrome.exe")) {
+		return true
+	}
+	if fileExist(filepath.Join(dir, "Application", "chrome.exe")) {
+		return true
+	}
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				if fileExist(filepath.Join(dir, e.Name(), "chrome.exe")) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// 读取 Helium/chrome.exe 的实际版本
+func readHeliumVersion(dir string) string {
+	if v := GetVersionFromPath(filepath.Join(dir, "chrome.exe")); v != "" {
+		return v
+	}
+	if v := GetVersionFromPath(filepath.Join(dir, "Application", "chrome.exe")); v != "" {
+		return v
+	}
+	return "-"
 }

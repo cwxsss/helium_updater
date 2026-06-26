@@ -256,6 +256,24 @@ func unzipAll(zipFile, targetDir string) error {
 	return nil
 }
 
+// 将源目录中的所有文件和子目录移动到目标目录
+func moveFiles(srcDir, dstDir string) error {
+	_ = os.MkdirAll(dstDir, os.ModePerm)
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(srcDir, entry.Name())
+		dstPath := filepath.Join(dstDir, entry.Name())
+		_ = os.RemoveAll(dstPath)
+		if err := os.Rename(srcPath, dstPath); err != nil {
+			return fmt.Errorf("move %s failed: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
 // 7z解压缩
 func UnCompress7z(filePath, targetDir string) {
 	r, err := sevenzip.OpenReader(filePath)
@@ -599,6 +617,18 @@ func GetVersion(sd *SettingsData, fileName string) string {
 		}
 	}
 	return "-"
+}
+
+// 从指定路径读取文件版本（不依赖 SettingsData）
+func GetVersionFromPath(exePath string) string {
+	if !fileExist(exePath) {
+		return ""
+	}
+	ver, err := GetFileVersion(exePath)
+	if err != nil {
+		return ""
+	}
+	return ver
 }
 func UnCompressBy7Zip(filePath, targetDir string) {
 	configPath := getConfigPath()

@@ -94,37 +94,68 @@ func autoInstall(data *SettingsData, info HeliumInfo) {
 	fileName := getHeliumDownloadFileName(info.DownloadUrl)
 	fileName = filepath.Join(parentPath, fileName)
 
-	var sha256 string
+	expectedSha256 := info.Sha256
+
+	// 先检查本地文件
+	needDownload := true
 	if fileExist(fileName) {
-		sha256 = sumFileSHA256(fileName)
-		if info.Sha256 != "" && sha256 != info.Sha256 {
-			sha256 = downloadHelium(info.DownloadUrl, fileName)
+		localSha256 := sumFileSHA256(fileName)
+		if expectedSha256 != "" && localSha256 == expectedSha256 {
+			needDownload = false
 		}
-	} else {
-		sha256 = downloadHelium(info.DownloadUrl, fileName)
 	}
 
-	if info.Sha256 == "" || sha256 == info.Sha256 {
-		chromeInUse := isProcessExist(filepath.Join(parentPath, "chrome.exe"))
-		if !chromeInUse {
-			// 检测实际安装目录（可能在 Application 子目录中）
-			extractDir := detectExtractDir(parentPath)
-			// 清理旧文件，避免新旧 DLL 混搭导致 SxS 错误
-			cleanHeliumDir(extractDir)
-			err := unzipAll(fileName, extractDir)
-			if err != nil {
-				logger.Errorf("自动更新解压失败: %v", err)
-				return
-			}
-			//清理文件
-			if !getBool(data.remainInstallFileSettings) {
-				_ = os.Remove(fileName)
-			}
-			if !getBool(data.remainHistoryFileSettings) {
-				_ = os.RemoveAll(filepath.Join(parentPath, getString(data.oldVer)))
-			}
-			_ = data.oldVer.Set(getString(data.curVer))
+	if needDownload {
+		sha256 := downloadHelium(info.DownloadUrl, fileName)
+		if expectedSha256 != "" && sha256 != expectedSha256 {
+			logger.Errorf("自动更新 SHA256 校验失败")
+			return
 		}
+	}
+
+	chromeInUse := isProcessExist(filepath.Join(parentPath, "chrome.exe"))
+	if !chromeInUse {
+		extractDir := detectExtractDir(parentPath)
+
+		// 安全解压到临时目录
+		tmpDir := filepath.Join(parentPath, "helium_update_tmp")
+		_ = os.RemoveAll(tmpDir)
+		if err := unzipAll(fileName, tmpDir); err != nil {
+			logger.Errorf("自动更新解压失败: %v", err)
+			_ = os.RemoveAll(tmpDir)
+			return
+		}
+
+		// 嵌套子目录检测
+		if !fileExist(filepath.Join(tmpDir, "chrome.exe")) {
+			entries, _ := os.ReadDir(tmpDir)
+			for _, e := range entries {
+				if e.IsDir() && fileExist(filepath.Join(tmpDir, e.Name(), "chrome.exe")) {
+					tmpDir = filepath.Join(tmpDir, e.Name())
+					break
+				}
+			}
+		}
+
+		if !fileExist(filepath.Join(tmpDir, "chrome.exe")) {
+			logger.Error("自动更新: 临时目录中未找到 chrome.exe")
+			_ = os.RemoveAll(filepath.Join(parentPath, "helium_update_tmp"))
+			return
+		}
+
+		// 清理旧文件并移动新文件
+		cleanHeliumDir(extractDir)
+		moveFiles(tmpDir, extractDir)
+		_ = os.RemoveAll(filepath.Join(parentPath, "helium_update_tmp"))
+
+		//清理
+		if !getBool(data.remainInstallFileSettings) {
+			_ = os.Remove(fileName)
+		}
+		if !getBool(data.remainHistoryFileSettings) {
+			_ = os.RemoveAll(filepath.Join(parentPath, getString(data.oldVer)))
+		}
+		_ = data.oldVer.Set(info.Version)
 	}
 }
 
