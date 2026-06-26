@@ -274,6 +274,30 @@ func moveFiles(srcDir, dstDir string) error {
 	return nil
 }
 
+// 移动文件到目标目录，跳过 excludes 列表中的文件名
+func moveFilesExclude(srcDir, dstDir string, excludes []string) error {
+	_ = os.MkdirAll(dstDir, os.ModePerm)
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return err
+	}
+skipLoop:
+	for _, entry := range entries {
+		for _, ex := range excludes {
+			if strings.EqualFold(entry.Name(), ex) {
+				continue skipLoop
+			}
+		}
+		srcPath := filepath.Join(srcDir, entry.Name())
+		dstPath := filepath.Join(dstDir, entry.Name())
+		_ = os.RemoveAll(dstPath)
+		if err := os.Rename(srcPath, dstPath); err != nil {
+			return fmt.Errorf("move %s failed: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
 // 7z解压缩
 func UnCompress7z(filePath, targetDir string) {
 	r, err := sevenzip.OpenReader(filePath)

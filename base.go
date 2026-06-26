@@ -302,19 +302,36 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 			return
 		}
 
-		// 从 chrome.dll 读取实际 Chromium 版本号作为目录名
-		chromeVer := GetVersionFromPath(filepath.Join(tmpDir, "chrome.dll"))
-		logger.Infof("chrome.dll 版本: %s", chromeVer)
-		verExtractDir := getVersionExtractDir(extractDir, chromeVer)
-		cleanHeliumDir(verExtractDir)
-		if err := moveFiles(tmpDir, verExtractDir); err != nil {
-			logger.Errorf("移动文件失败: %v", err)
-			downloadErrorFlag.Store(true)
-			fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
-			defer data.checkBtnStatus.Set(false)
-			defer data.folderEntryStatus.Set(false)
-			defer func() { runFlag = 0 }()
-			return
+		// 检测 Chrome++ 模式
+		isChromePlus := fileExist(filepath.Join(extractDir, "version.dll"))
+
+		if isChromePlus {
+			// Chrome++ 模式：所有浏览器文件放到 version.dll 同级目录
+			logger.Info("Chrome++ 模式：直接解压到 Application 目录（保留 chrome.exe/version.dll）")
+			cleanHeliumDir(extractDir)
+			if err := moveFilesExclude(tmpDir, extractDir, []string{"chrome.exe"}); err != nil {
+				logger.Errorf("移动文件失败: %v", err)
+				downloadErrorFlag.Store(true)
+				fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
+				defer data.checkBtnStatus.Set(false)
+				defer data.folderEntryStatus.Set(false)
+				defer func() { runFlag = 0 }()
+				return
+			}
+		} else {
+			chromeVer := GetVersionFromPath(filepath.Join(tmpDir, "chrome.dll"))
+			logger.Infof("chrome.dll 版本: %s", chromeVer)
+			verExtractDir := getVersionExtractDir(extractDir, chromeVer)
+			cleanHeliumDir(verExtractDir)
+			if err := moveFiles(tmpDir, verExtractDir); err != nil {
+				logger.Errorf("移动文件失败: %v", err)
+				downloadErrorFlag.Store(true)
+				fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
+				defer data.checkBtnStatus.Set(false)
+				defer data.folderEntryStatus.Set(false)
+				defer func() { runFlag = 0 }()
+				return
+			}
 		}
 
 		if !getBool(data.remainInstallFileSettings) {
