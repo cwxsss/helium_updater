@@ -302,8 +302,10 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 			return
 		}
 
-		// 移动到版本子目录
-		verExtractDir := getVersionExtractDir(extractDir, info.Version)
+		// 从 chrome.dll 读取实际 Chromium 版本号作为目录名
+		chromeVer := GetVersionFromPath(filepath.Join(tmpDir, "chrome.dll"))
+		logger.Infof("chrome.dll 版本: %s", chromeVer)
+		verExtractDir := getVersionExtractDir(extractDir, chromeVer)
 		cleanHeliumDir(verExtractDir)
 		if err := moveFiles(tmpDir, verExtractDir); err != nil {
 			logger.Errorf("移动文件失败: %v", err)
