@@ -142,6 +142,9 @@ func baseScreen(win fyne.Window, data *SettingsData) fyne.CanvasObject {
 	downloadProgress.TextFormatter = func() string {
 		fs, _ := data.fileSize.Get()
 		if downloadErrorFlag.Load() {
+			if msg := downloadErrorMsg.Load(); msg != nil {
+				return msg.(string)
+			}
 			return LoadString("DownloadFailedMsg")
 		} else if downloadProgress.Max*0.9 == downloadProgress.Value {
 			return fmt.Sprintf(LoadString("DownLoadedProcessMsg"), fs)
@@ -198,6 +201,7 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 	if err != nil {
 		logger.Errorf("获取下载信息失败: %v", err)
 		downloadErrorFlag.Store(true)
+		downloadErrorMsg.Store("获取版本信息失败: " + err.Error())
 		data.checkBtnStatus.Set(false)
 		data.folderEntryStatus.Set(false)
 		runFlag = 0
@@ -237,6 +241,7 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 		if err != nil {
 			logger.Errorf("下载失败: %v", err)
 			downloadErrorFlag.Store(true)
+			downloadErrorMsg.Store("下载文件失败: " + err.Error())
 			fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
 			data.checkBtnStatus.Set(false)
 			data.folderEntryStatus.Set(false)
@@ -249,6 +254,7 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 		if expectedSha256 != "" && sha256 != expectedSha256 {
 			logger.Errorf("SHA256 校验失败: 期望=%s, 实际=%s", expectedSha256, sha256)
 			downloadErrorFlag.Store(true)
+			downloadErrorMsg.Store("SHA256 校验失败")
 			fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
 			data.checkBtnStatus.Set(false)
 			data.folderEntryStatus.Set(false)
@@ -262,9 +268,10 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 
 	cmd := exec.Command(fileName, "/S", fmt.Sprintf("/D=%s", parentPath))
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-	if err := cmd.Run(); err != nil {
-		logger.Errorf("安装程序执行失败: %v", err)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		logger.Errorf("安装程序执行失败: %v, 输出: %s", err, string(out))
 		downloadErrorFlag.Store(true)
+		downloadErrorMsg.Store(fmt.Sprintf("安装程序执行失败: %v", err))
 		fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
 		data.checkBtnStatus.Set(false)
 		data.folderEntryStatus.Set(false)
@@ -276,6 +283,7 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 	if !fileExist(filepath.Join(parentPath, "chrome.exe")) {
 		logger.Error("安装后未找到 chrome.exe")
 		downloadErrorFlag.Store(true)
+		downloadErrorMsg.Store("安装完成但未找到 chrome.exe")
 		fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
 		data.checkBtnStatus.Set(false)
 		data.folderEntryStatus.Set(false)
@@ -322,6 +330,7 @@ var (
 	downloadProgress  *widget.ProgressBar
 	downloadBtn       *widget.Button
 	downloadErrorFlag atomic.Bool
+	downloadErrorMsg  atomic.Value // string, 存储具体错误信息
 )
 
 // 处理Helium安装路径
