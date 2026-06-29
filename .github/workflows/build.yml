@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: ['amd64', '386', 'arm64']
+        arch: ['amd64']
     steps:
       - uses: actions/checkout@v6
         with:
@@ -41,9 +41,7 @@ jobs:
           mkdir -p ${GITHUB_WORKSPACE}/dist
           unzip ${GITHUB_WORKSPACE}/fyne-cross/dist/windows-${{ matrix.arch }}/helium_updater.exe.zip -d ${GITHUB_WORKSPACE}/fyne-cross/dist/windows-${{ matrix.arch }}
           mv -f ${GITHUB_WORKSPACE}/fyne-cross/dist/windows-${{ matrix.arch }}/helium_updater.exe ${GITHUB_WORKSPACE}/dist/helium_updater.exe
-          if [ ${{ matrix.arch }} != 'arm64' ]; then
-             upx -9 ${GITHUB_WORKSPACE}/dist/helium_updater.exe
-          fi
+          upx -9 ${GITHUB_WORKSPACE}/dist/helium_updater.exe
           zip -rj ${GITHUB_WORKSPACE}/dist/helium_updater-windows-${{ matrix.arch }}.zip ${GITHUB_WORKSPACE}/dist/helium_updater.exe
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
@@ -74,6 +72,4 @@ jobs:
             
             自动构建发布。支持架构：
             - Windows amd64 (x64)
-            - Windows 386 (x86)
-            - Windows arm64
           files: artifacts/**/*
