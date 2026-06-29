@@ -208,8 +208,6 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 	fileName := getHeliumDownloadFileName(info.DownloadUrl)
 	fileName = filepath.Join(parentPath, fileName)
 
-	// 检测实际解压目录（可能在 Application 子目录中）
-	extractDir := detectExtractDir(parentPath)
 	expectedSha256 := strings.TrimSpace(info.Sha256)
 
 	// 先检查本地是否已有有效文件，跳过下载
@@ -257,15 +255,13 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 		}
 	}
 
-	// 安全解压：先解压到临时目录，验证后覆盖
+	// 静默运行安装程序
 	fyne.DoAndWait(func() { downloadProgress.SetValue(0.95) })
 
-	tmpDir := filepath.Join(parentPath, "helium_update_tmp")
-	_ = os.RemoveAll(tmpDir)
-	defer os.RemoveAll(tmpDir)
-
-	if err := unzipAll(fileName, tmpDir); err != nil {
-		logger.Errorf("解压到临时目录失败: %v", err)
+	cmd := exec.Command(fileName, "/S", fmt.Sprintf("/D=%s", parentPath))
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	if err := cmd.Run(); err != nil {
+		logger.Errorf("安装程序执行失败: %v", err)
 		downloadErrorFlag.Store(true)
 		fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
 		data.checkBtnStatus.Set(false)
@@ -274,31 +270,9 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 		return
 	}
 
-	// 验证临时目录中确实有 chrome.exe（可能在嵌套子目录）
-	if !fileExist(filepath.Join(tmpDir, "chrome.exe")) {
-		entries, _ := os.ReadDir(tmpDir)
-		for _, e := range entries {
-			if e.IsDir() && fileExist(filepath.Join(tmpDir, e.Name(), "chrome.exe")) {
-				tmpDir = filepath.Join(tmpDir, e.Name())
-				break
-			}
-		}
-	}
-
-	if !fileExist(filepath.Join(tmpDir, "chrome.exe")) {
-		logger.Error("解压后的文件中未找到 chrome.exe")
-		downloadErrorFlag.Store(true)
-		fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
-		data.checkBtnStatus.Set(false)
-		data.folderEntryStatus.Set(false)
-		runFlag = 0
-		return
-	}
-
-	// 清理旧文件，把新文件移过去
-	cleanHeliumDir(extractDir)
-	if err := moveFiles(tmpDir, extractDir); err != nil {
-		logger.Errorf("移动文件失败: %v", err)
+	// 验证安装是否成功
+	if !fileExist(filepath.Join(parentPath, "chrome.exe")) {
+		logger.Error("安装后未找到 chrome.exe")
 		downloadErrorFlag.Store(true)
 		fyne.DoAndWait(func() { downloadProgress.SetValue(0) })
 		data.checkBtnStatus.Set(false)
@@ -320,68 +294,6 @@ func execHeliumInstall(data *SettingsData, downloadProgress *widget.ProgressBar)
 	data.checkBtnStatus.Set(false)
 	data.folderEntryStatus.Set(false)
 	runFlag = 0
-}
-
-// 检测 chrome.exe 实际所在目录（可能在 Application 子目录中）
-func detectExtractDir(installPath string) string {
-	// 如果当前安装目录下 Application\chrome.exe 存在，说明是 NSIS 安装器结构
-	appDir := filepath.Join(installPath, "Application")
-	if _, err := os.Stat(filepath.Join(appDir, "chrome.exe")); err == nil {
-		logger.Debug("检测到 Application 子目录结构，解压到 Application 目录")
-		return appDir
-	}
-	// 否则直接解压到安装根目录
-	logger.Debug("检测到根目录结构，直接解压到安装目录")
-	return installPath
-}
-
-// 清理 Helium 目录中的旧程序文件，防止新旧 DLL 版本冲突
-// 注意：保留 User Data 等用户数据目录
-func cleanHeliumDir(targetDir string) {
-	// 只删除已知的程序文件，不删除任何目录（保护 User Data）
-	knownFiles := []string{
-		"chrome.exe",
-		"chrome.dll",
-		"chrome_child.dll",
-		"chrome_elf.dll",
-		"libegl.dll",
-		"libglesv2.dll",
-		"libvk_swiftshader.dll",
-		"v8_context_snapshot.bin",
-		"icudtl.dat",
-		"resources.pak",
-		"chrome_100_percent.pak",
-		"chrome_200_percent.pak",
-		"chrome_utils.dll",
-		"elevation_service.exe",
-		"notification_helper.exe",
-		"setup.exe",
-		"WidevineCdm",
-	}
-	for _, f := range knownFiles {
-		p := filepath.Join(targetDir, f)
-		if fi, err := os.Stat(p); err == nil {
-			if !fi.IsDir() {
-				os.Remove(p)
-			} else {
-				os.RemoveAll(p)
-			}
-		}
-	}
-	// 清理已知的程序子目录（不含用户数据）
-	knownDirs := []string{
-		"locales",
-		"resources",
-		"swiftshader",
-		"MEIPreload",
-	}
-	for _, d := range knownDirs {
-		p := filepath.Join(targetDir, d)
-		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
-			os.RemoveAll(p)
-		}
-	}
-	logger.Debug("清理旧程序文件完成，保留 User Data")
 }
 
 func createDeskLnk(data *SettingsData) error {

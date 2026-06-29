@@ -57,8 +57,8 @@ func getHeliumInfo(data *SettingsData) (HeliumInfo, error) {
 			continue
 		}
 		for _, asset := range release.Assets {
-			// 匹配便携版 .zip: helium_{version}_{arch}-windows.zip
-			targetSuffix := fmt.Sprintf("_%s-windows.zip", arch)
+			// 匹配安装包 .exe: helium_{version}_{arch}-installer.exe
+			targetSuffix := fmt.Sprintf("_%s-installer.exe", arch)
 			if strings.HasSuffix(asset.Name, targetSuffix) {
 				sha256 := strings.TrimPrefix(asset.Digest, "sha256:")
 				return HeliumInfo{

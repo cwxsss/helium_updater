@@ -115,38 +115,19 @@ func autoInstall(data *SettingsData, info HeliumInfo) {
 
 	chromeInUse := isProcessExist(filepath.Join(parentPath, "chrome.exe"))
 	if !chromeInUse {
-		extractDir := detectExtractDir(parentPath)
-
-		// 安全解压到临时目录
-		tmpDir := filepath.Join(parentPath, "helium_update_tmp")
-		_ = os.RemoveAll(tmpDir)
-		if err := unzipAll(fileName, tmpDir); err != nil {
-			logger.Errorf("自动更新解压失败: %v", err)
-			_ = os.RemoveAll(tmpDir)
+		// 静默运行安装程序
+		cmd := exec.Command(fileName, "/S", fmt.Sprintf("/D=%s", parentPath))
+		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+		if err := cmd.Run(); err != nil {
+			logger.Errorf("自动更新安装失败: %v", err)
 			return
 		}
 
-		// 嵌套子目录检测
-		if !fileExist(filepath.Join(tmpDir, "chrome.exe")) {
-			entries, _ := os.ReadDir(tmpDir)
-			for _, e := range entries {
-				if e.IsDir() && fileExist(filepath.Join(tmpDir, e.Name(), "chrome.exe")) {
-					tmpDir = filepath.Join(tmpDir, e.Name())
-					break
-				}
-			}
-		}
-
-		if !fileExist(filepath.Join(tmpDir, "chrome.exe")) {
-			logger.Error("自动更新: 临时目录中未找到 chrome.exe")
-			_ = os.RemoveAll(filepath.Join(parentPath, "helium_update_tmp"))
+		// 验证安装
+		if !fileExist(filepath.Join(parentPath, "chrome.exe")) {
+			logger.Error("自动更新: 安装后未找到 chrome.exe")
 			return
 		}
-
-		// 清理旧文件并移动新文件
-		cleanHeliumDir(extractDir)
-		moveFiles(tmpDir, extractDir)
-		_ = os.RemoveAll(filepath.Join(parentPath, "helium_update_tmp"))
 
 		//清理
 		if !getBool(data.remainInstallFileSettings) {
